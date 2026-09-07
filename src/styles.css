@@ -2817,6 +2817,15 @@ body.export-busy {
   justify-items: center;
 }
 
+.pair-cell-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.pair-cell-actions .secondary-button {
+  padding-inline: 10px;
+}
+
 .pair-cell canvas {
   display: block;
   border-radius: 8px;
@@ -4548,7 +4557,9 @@ body.export-busy {
 
 .live-photo-platforms {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  /* 时长 3 个、倍速 4 个，按数量自动等分 */
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
   gap: 5px;
   padding: 4px;
   border: 1px solid var(--line);
@@ -4568,6 +4579,12 @@ body.export-busy {
 .live-photo-platforms button.active {
   color: var(--active-text);
   background: var(--active-bg);
+}
+/* 素材长度不够的档位：置灰但仍可点，点了会说明差多少 */
+.live-photo-platforms button.is-unavailable {
+  opacity: 0.38;
+  cursor: not-allowed;
+  text-decoration: line-through;
 }
 
 .live-photo-ratio-grid {

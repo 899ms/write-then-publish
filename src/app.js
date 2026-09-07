@@ -249,6 +249,8 @@ const els = {
   pairCanvasRight: $("#pairCanvasRight"),
   pairCropLeft: $("#pairCropLeftBtn"),
   pairCropRight: $("#pairCropRightBtn"),
+  pairDropLeft: $("#pairDropLeftBtn"),
+  pairDropRight: $("#pairDropRightBtn"),
   pairSwap: $("#pairSwapBtn"),
   pairDone: $("#pairDoneBtn"),
   pairRatioButtons: document.querySelectorAll("[data-pair-ratio]"),
@@ -282,7 +284,9 @@ const els = {
   livePhotoFileLabel: $("#livePhotoFileLabel"),
   livePhotoFileSwap: $("#livePhotoFileSwap"),
   livePhotoVideoMeta: $("#livePhotoVideoMeta"),
-  livePhotoPlatformButtons: document.querySelectorAll("[data-live-platform]"),
+  livePhotoDurationButtons: document.querySelectorAll("[data-live-duration]"),
+  livePhotoSpeedButtons: document.querySelectorAll("[data-live-speed]"),
+  livePhotoSpeedHint: $("#livePhotoSpeedHint"),
   livePhotoRatioButtons: document.querySelectorAll("[data-live-ratio]"),
   livePhotoCustomRatioRow: $("#livePhotoCustomRatioRow"),
   livePhotoCustomRatio: $("#livePhotoCustomRatioInput"),
@@ -501,7 +505,8 @@ const livePhotoState = {
   sourceDuration: 0,
   sourceWidth: 0,
   sourceHeight: 0,
-  platform: "xhs",
+  duration: 5,
+  speed: 1,
   aspect: "original",
   customAspect: 0.75,
   localReady: false,
@@ -675,7 +680,8 @@ function cardsGuideImages() {
       demoOnly: true,
       layout: { widthPercent: 100, align: "center" },
       liveSettings: {
-        platform: "xhs",
+        duration: 5,
+        speed: 1,
         aspect: "1.777778",
         start: 0,
         coverOffset: 0.2,
@@ -4861,9 +4867,16 @@ function finiteNumber(value, fallback) {
   return Number.isFinite(number) ? number : fallback;
 }
 
+const LIVE_PHOTO_DURATIONS = [3, 5, 8];
+const LIVE_PHOTO_SPEEDS = [1, 1.5, 2, 3];
+
 function normalizeLiveMediaSettings(settings = {}) {
-  const platform = settings.platform === "wechat" ? "wechat" : "xhs";
-  const duration = platform === "wechat" ? 3 : 5;
+  // 老数据只有 platform（小红书 5 秒 / 公众号 3 秒），按时长迁移过来。
+  const legacyDuration = settings.platform === "wechat" ? 3 : 5;
+  const duration = LIVE_PHOTO_DURATIONS.includes(Number(settings.duration))
+    ? Number(settings.duration)
+    : legacyDuration;
+  const speed = LIVE_PHOTO_SPEEDS.includes(Number(settings.speed)) ? Number(settings.speed) : 1;
   const allowedAspects = ["free", "original", "1", "1.333333", "1.777778", "0.75", "0.5625"];
   const aspect = allowedAspects.includes(String(settings.aspect)) ? String(settings.aspect) : "original";
   const rawCrop = settings.crop && typeof settings.crop === "object" ? settings.crop : null;
@@ -4880,7 +4893,8 @@ function normalizeLiveMediaSettings(settings = {}) {
     crop.height = Math.min(crop.height, 1 - crop.y);
   }
   return {
-    platform,
+    duration,
+    speed,
     aspect,
     customAspect: clamp(finiteNumber(settings.customAspect, 0.75), 0.4, 2.5),
     start: clamp(finiteNumber(settings.start, 0), 0, 1800),
@@ -5616,7 +5630,10 @@ function updateImageList() {
         ? `${Math.round(layout.widthPercent)}%`
         : "自适应";
     const liveLabel = image.kind === "live"
-      ? `${image.liveSettings?.platform === "wechat" ? "公众号 3 秒" : "小红书 5 秒"} · ${livePhotoAspectLabel(image)} · 实况`
+      ? (() => {
+          const live = normalizeLiveMediaSettings(image.liveSettings);
+          return `${live.duration} 秒${live.speed > 1 ? ` · ${live.speed}×` : ""} · ${livePhotoAspectLabel(image)} · 实况`;
+        })()
       : image.crop
         ? "已裁剪"
         : "原图比例";
@@ -5796,6 +5813,7 @@ function resetCropperTarget() {
   }
   updateImageList();
   closeCropper();
+  refreshPairEditor();
   requestRender();
 }
 
@@ -6451,6 +6469,17 @@ function parseInline(text, baseStart = 0) {
       continue;
     }
 
+    // [文字](链接)：从 Obsidian 等处粘贴过来的超链接，此前会把方括号和整条
+    // URL 原样显示出来。这里解析成文字，链接留给长文的 <a> 用。
+    const linkMatch = text.slice(i).match(/^\[([^\[\]\n]+)\]\(((?:[^()\s]|\([^()\s]*\))*)(?:\s+"[^"]*")?\)/);
+    if (linkMatch) {
+      const href = /^(?:https?:|mailto:)/i.test(linkMatch[2]) ? linkMatch[2] : "";
+      const inner = parseInline(linkMatch[1], baseStart + i + 1);
+      tokens.push(...(href ? applyInlineStyle(inner, { link: href }) : inner));
+      i += linkMatch[0].length;
+      continue;
+    }
+
     const underlineMatch = matchUnderlineMarker(text, i);
     if (underlineMatch) {
       tokens.push(
@@ -6519,7 +6548,7 @@ function parseInline(text, baseStart = 0) {
       }
     }
 
-    const nextMarkers = ["[[image:", "{{underline:", "{{color:", "{{bg:", "***", "**", "*"]
+    const nextMarkers = ["[[image:", "[", "{{underline:", "{{color:", "{{bg:", "***", "**", "*"]
       .map((marker) => text.indexOf(marker, i + 1))
       .filter((index) => index !== -1);
     const next = nextMarkers.length ? Math.min(...nextMarkers) : text.length;
@@ -7514,6 +7543,9 @@ function renderArticleInlineTokens(tokens) {
       let inner = escapeHtml(token.text).replace(/`([^`]+)`/g, "<code>$1</code>");
       if (token.bold) inner = `<strong>${inner}</strong>`;
       if (token.italic) inner = `<em>${inner}</em>`;
+      if (token.link) {
+        inner = `<a href="${escapeAttribute(token.link)}" style="color: inherit; text-decoration: none;">${inner}</a>`;
+      }
 
       const styles = [];
       if (token.color) styles.push(`color: ${token.color}`);
@@ -7525,6 +7557,9 @@ function renderArticleInlineTokens(tokens) {
       }
       if (token.bgColor) {
         styles.push(`background-color: ${token.bgColor}`);
+        // 微信深色模式只反转没有显式颜色的文字，却照样保留内联背景色：
+        // 浅色高亮块上的字会被反成浅色而看不见。这里按底色明暗写死文字色。
+        if (!token.color) styles.push(`color: ${isDarkHexColor(token.bgColor) ? "#ffffff" : "#1f2329"}`);
         styles.push("border-radius: 4px");
         styles.push("box-decoration-break: clone");
         styles.push("-webkit-box-decoration-break: clone");
@@ -7567,11 +7602,12 @@ function createLivePreviewVideo(image, imageId, className) {
   }
   video.addEventListener("loadedmetadata", () => {
     video.currentTime = Math.min(video.duration || settings.start, settings.start);
+    video.playbackRate = settings.speed;
     video.play().catch(() => {});
   });
   video.addEventListener("timeupdate", () => {
-    const duration = settings.platform === "wechat" ? 3 : 5;
-    if (video.currentTime >= settings.start + duration) {
+    const span = settings.duration * settings.speed;
+    if (video.currentTime >= settings.start + span) {
       video.currentTime = settings.start;
       video.play().catch(() => {});
     }
@@ -7920,7 +7956,27 @@ async function syncArticleToWechatDraft() {
 const LIVE_CROP_MIN_SIZE = 32;
 
 function livePhotoDuration() {
-  return livePhotoState.platform === "wechat" ? 3 : 5;
+  return LIVE_PHOTO_DURATIONS.includes(livePhotoState.duration) ? livePhotoState.duration : 5;
+}
+
+/** 倍速下成片时长不变，但要从原片里取用更长的一段。选区、起点都按这个算。 */
+function livePhotoSourceSpan() {
+  return livePhotoDuration() * livePhotoSpeed();
+}
+
+/** 这个「时长 × 倍速」要取用的原片长度，当前视频够不够。没选视频时不拦。 */
+function livePhotoComboFits(duration, speed) {
+  const total = livePhotoState.sourceDuration;
+  if (!total) return true;
+  return duration * speed <= total + 0.03;
+}
+
+function livePhotoComboMessage(duration, speed) {
+  return `视频只有 ${formatLivePhotoDuration(livePhotoState.sourceDuration)}，${duration} 秒${speed === 1 ? "" : ` × ${speed}×`} 需要 ${(duration * speed).toFixed(1)} 秒素材。`;
+}
+
+function livePhotoSpeed() {
+  return LIVE_PHOTO_SPEEDS.includes(livePhotoState.speed) ? livePhotoState.speed : 1;
 }
 
 function livePhotoAspectRatio() {
@@ -8012,7 +8068,7 @@ function setLivePhotoServiceMessage(message, type = "") {
 function livePhotoSelectionIsValid() {
   if (!livePhotoState.file || !livePhotoState.sourceDuration) return false;
   const start = Number(els.livePhotoStart.value) || 0;
-  return start >= 0 && start + livePhotoDuration() <= livePhotoState.sourceDuration + 0.03;
+  return start >= 0 && start + livePhotoSourceSpan() <= livePhotoState.sourceDuration + 0.03;
 }
 
 function updateLivePhotoGenerateState() {
@@ -8300,7 +8356,7 @@ function seekLivePhotoPreview(toCover = false) {
 }
 
 /**
- * 视频比目标时长（小红书 5 秒 / 微信 3 秒）长时，让用户在缩略图时间轴上直接拖方框选片段。
+ * 视频比要取用的时长长时，让用户在缩略图时间轴上直接拖方框选片段。
  * 刚好等于或短于目标时长就没得选，整条时间轴收起来。
  */
 function updateLivePhotoTrimUi(start, target, availableStart) {
@@ -8310,11 +8366,16 @@ function updateLivePhotoTrimUi(start, target, availableStart) {
   if (!trimmable) return;
   const total = livePhotoState.sourceDuration;
   const end = Math.min(total, start + target);
+  const speed = livePhotoSpeed();
   if (els.livePhotoTrimOutput) {
-    els.livePhotoTrimOutput.textContent = `第 ${start.toFixed(1)} – ${end.toFixed(1)} 秒`;
+    els.livePhotoTrimOutput.textContent = speed === 1
+      ? `第 ${start.toFixed(1)} – ${end.toFixed(1)} 秒`
+      : `第 ${start.toFixed(1)} – ${end.toFixed(1)} 秒 → 成片 ${livePhotoDuration()} 秒`;
   }
   if (els.livePhotoTrimHint) {
-    els.livePhotoTrimHint.textContent = `视频共 ${formatLivePhotoDuration(total)}，方框就是会被做成实况的那一段`;
+    els.livePhotoTrimHint.textContent = speed === 1
+      ? `视频共 ${formatLivePhotoDuration(total)}，方框就是会被做成实况的那一段`
+      : `视频共 ${formatLivePhotoDuration(total)}；${speed}× 要取用 ${target.toFixed(1)} 秒原片，压进 ${livePhotoDuration()} 秒实况`;
   }
   if (els.livePhotoTrimWindow) {
     els.livePhotoTrimWindow.style.width = `${(target / total) * 100}%`;
@@ -8387,7 +8448,7 @@ function bindLivePhotoTrimTrack() {
   let dragging = false;
 
   const applyFromPointer = (clientX) => {
-    const target = livePhotoDuration();
+    const target = livePhotoSourceSpan();
     const total = livePhotoState.sourceDuration;
     if (!total || total <= target) return;
     const rect = track.getBoundingClientRect();
@@ -8423,7 +8484,7 @@ function bindLivePhotoTrimTrack() {
     const step = event.shiftKey ? 1 : 0.1;
     if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
     const current = Math.max(0, Number(els.livePhotoStart.value) || 0);
-    const available = Math.max(0, livePhotoState.sourceDuration - livePhotoDuration());
+    const available = Math.max(0, livePhotoState.sourceDuration - livePhotoSourceSpan());
     const next = clamp(current + (event.key === "ArrowRight" ? step : -step), 0, available);
     els.livePhotoStart.value = String(Number(next.toFixed(1)));
     normalizeLivePhotoTiming();
@@ -8433,19 +8494,25 @@ function bindLivePhotoTrimTrack() {
 }
 
 function normalizeLivePhotoTiming() {
-  const target = livePhotoDuration();
+  const target = livePhotoSourceSpan();
   const availableStart = Math.max(0, livePhotoState.sourceDuration - target);
   const currentStart = Math.max(0, Number(els.livePhotoStart.value) || 0);
   const normalizedStart = Math.min(currentStart, availableStart);
   els.livePhotoStart.max = String(Math.max(0, availableStart).toFixed(1));
   els.livePhotoStart.value = String(Number(normalizedStart.toFixed(1)));
-  const latestCover = Math.max(0, target - 0.05);
+  const latestCover = Math.max(0, livePhotoDuration() - 0.05);
   els.livePhotoCover.max = String(latestCover);
   const cover = Math.min(latestCover, Math.max(0, finiteNumber(els.livePhotoCover.value, 0.2)));
   els.livePhotoCover.value = String(Number(cover.toFixed(1)));
   updateLivePhotoTrimUi(normalizedStart, target, availableStart);
   if (livePhotoState.file && livePhotoState.sourceDuration < target) {
-    setLivePhotoServiceMessage(`当前视频只有 ${formatLivePhotoDuration(livePhotoState.sourceDuration)}，不足以生成 ${target} 秒版本。`, "error");
+    const speed = livePhotoSpeed();
+    setLivePhotoServiceMessage(
+      speed === 1
+        ? `当前视频只有 ${formatLivePhotoDuration(livePhotoState.sourceDuration)}，不足以生成 ${livePhotoDuration()} 秒版本。`
+        : `${speed}× 倍速的 ${livePhotoDuration()} 秒实况需要 ${target.toFixed(1)} 秒素材，当前视频只有 ${formatLivePhotoDuration(livePhotoState.sourceDuration)}。`,
+      "error",
+    );
   } else if (livePhotoState.file) {
     // 浏览器能自己合成时就别再说「上传到云端 Mac」——那条路径已经不会走了。
     setLivePhotoServiceMessage(
@@ -8462,14 +8529,56 @@ function normalizeLivePhotoTiming() {
   updateLivePhotoGenerateState();
 }
 
-function setLivePhotoPlatform(platform) {
-  livePhotoState.platform = platform === "wechat" ? "wechat" : "xhs";
-  els.livePhotoPlatformButtons.forEach((button) => {
-    button.classList.toggle("active", button.dataset.livePlatform === livePhotoState.platform);
-  });
+function setLivePhotoDuration(value) {
+  const duration = LIVE_PHOTO_DURATIONS.includes(Number(value)) ? Number(value) : 5;
+  if (!livePhotoComboFits(duration, livePhotoSpeed())) {
+    setLivePhotoServiceMessage(livePhotoComboMessage(duration, livePhotoSpeed()), "error");
+    return;
+  }
+  livePhotoState.duration = duration;
+  syncLivePhotoTimingUi();
+}
+
+function setLivePhotoSpeed(value) {
+  const speed = LIVE_PHOTO_SPEEDS.includes(Number(value)) ? Number(value) : 1;
+  if (!livePhotoComboFits(livePhotoDuration(), speed)) {
+    setLivePhotoServiceMessage(livePhotoComboMessage(livePhotoDuration(), speed), "error");
+    return;
+  }
+  livePhotoState.speed = speed;
+  syncLivePhotoTimingUi();
+}
+
+function syncLivePhotoTimingUi() {
   const duration = livePhotoDuration();
-  els.livePhotoDurationHint.textContent = livePhotoState.platform === "wechat" ? "公众号版本固定生成 3 秒" : "小红书版本固定生成 5 秒";
+  const speed = livePhotoSpeed();
+  els.livePhotoDurationButtons.forEach((button) => {
+    const value = Number(button.dataset.liveDuration);
+    const fits = livePhotoComboFits(value, speed);
+    button.classList.toggle("active", value === duration);
+    button.classList.toggle("is-unavailable", !fits);
+    button.setAttribute("aria-disabled", fits ? "false" : "true");
+    button.title = fits ? "" : livePhotoComboMessage(value, speed);
+  });
+  els.livePhotoSpeedButtons.forEach((button) => {
+    const value = Number(button.dataset.liveSpeed);
+    const fits = livePhotoComboFits(duration, value);
+    button.classList.toggle("active", value === speed);
+    button.classList.toggle("is-unavailable", !fits);
+    button.setAttribute("aria-disabled", fits ? "false" : "true");
+    button.title = fits ? "" : livePhotoComboMessage(duration, value);
+  });
+  els.livePhotoDurationHint.textContent = `成片固定 ${duration} 秒`;
+  if (els.livePhotoSpeedHint) {
+    els.livePhotoSpeedHint.textContent = speed === 1
+      ? "原速播放"
+      : `取用原片 ${(duration * speed).toFixed(1)} 秒，压进 ${duration} 秒（无声）`;
+  }
   els.livePhotoCover.max = String(Math.max(0, duration - 0.05));
+  // 预览直接按倍速播，看到的就是成片的节奏。
+  els.livePhotoVideo.playbackRate = speed;
+  // 倍速下音频要重采样才能对上，成片一律静音，这里同步把开关置灰。
+  if (els.livePhotoSound) els.livePhotoSound.disabled = speed !== 1;
   normalizeLivePhotoTiming();
   seekLivePhotoPreview(true);
 }
@@ -8539,6 +8648,7 @@ function handleLivePhotoMetadata() {
   normalizeLivePhotoTiming();
   setLivePhotoAspect(livePhotoState.aspect, { preserveCropSize: Boolean(livePhotoState.savedCrop) });
   seekLivePhotoPreview(false);
+  els.livePhotoVideo.playbackRate = livePhotoSpeed();
   applyLivePhotoPreviewSound();
   void buildLivePhotoTrimStrip();
   els.livePhotoVideo.play().catch(() => {
@@ -8574,7 +8684,7 @@ function applyLivePhotoPreviewSound() {
 function keepLivePhotoPreviewInRange() {
   if (!livePhotoState.sourceDuration || els.livePhotoVideo.paused) return;
   const start = Math.max(0, Number(els.livePhotoStart.value) || 0);
-  if (els.livePhotoVideo.currentTime >= start + livePhotoDuration()) {
+  if (els.livePhotoVideo.currentTime >= start + livePhotoSourceSpan()) {
     els.livePhotoVideo.currentTime = start;
     els.livePhotoVideo.play().catch(() => {});
   }
@@ -8612,7 +8722,9 @@ function resetLivePhotoForm(settings = {}) {
   livePhotoState.customAspect = normalized.customAspect;
   els.livePhotoCustomRatio.value = String(normalized.customAspect);
   els.livePhotoCustomRatioOutput.value = normalized.customAspect.toFixed(2);
-  setLivePhotoPlatform(normalized.platform);
+  livePhotoState.duration = normalized.duration;
+  livePhotoState.speed = normalized.speed;
+  syncLivePhotoTimingUi();
   setLivePhotoAspect(normalized.aspect, { preserveCropSize: Boolean(normalized.crop) });
   els.livePhotoStart.value = String(normalized.start);
   els.livePhotoCover.value = String(normalized.coverOffset);
@@ -8726,7 +8838,8 @@ async function applyLivePhotoAsset(event) {
     const videoKey = String(state.images[id]?.videoKey || id);
     const cover = await captureLivePhotoCover();
     const settings = normalizeLiveMediaSettings({
-      platform: livePhotoState.platform,
+      duration: livePhotoState.duration,
+      speed: livePhotoState.speed,
       aspect: livePhotoState.aspect,
       customAspect: livePhotoState.customAspect,
       start: Number(els.livePhotoStart.value) || 0,
@@ -8944,7 +9057,27 @@ function imageHitIsPairable(hit) {
 }
 
 // ===== 拼图调整弹窗 =====
-const pairEditor = { leftId: null, rightId: null, ratio: DEFAULT_PAIR_RATIO };
+// 拼图弹窗按草稿处理：打开时记下原样，关闭即回滚，只有「完成」才留下改动。
+const pairEditor = {
+  leftId: null,
+  rightId: null,
+  ratio: DEFAULT_PAIR_RATIO,
+  originalRef: "",
+  originalCrops: null,
+  createdImageId: "",
+};
+
+function pairRefText(leftId, rightId, ratio) {
+  const suffix = normalizePairRatio(ratio) === DEFAULT_PAIR_RATIO ? "" : `|${normalizePairRatio(ratio)}`;
+  return `[[image:${leftId}|${rightId}${suffix}]]`;
+}
+
+/** 正文里已经没人引用这张图时，把它从素材里一并清掉，免得列表留空壳。 */
+function dropUnreferencedImage(imageId) {
+  if (!imageId || !state.images[imageId]) return;
+  if (new RegExp(`\\[\\[image:(?:${imageId}\\b|[\\w-]+\\|${imageId}\\b)`).test(els.content.value)) return;
+  delete state.images[imageId];
+}
 
 function pairModalIsOpen() {
   return Boolean(els.pairModal && !els.pairModal.classList.contains("hidden"));
@@ -8997,18 +9130,70 @@ function refreshPairEditor() {
   drawPairEditorCell(els.pairCanvasRight, pairEditor.rightId);
 }
 
-function openPairEditor(leftId, rightId, ratio = DEFAULT_PAIR_RATIO) {
+function openPairEditor(leftId, rightId, ratio = DEFAULT_PAIR_RATIO, options = {}) {
   if (!els.pairModal || !state.images[leftId] || !state.images[rightId]) return;
   pairEditor.leftId = leftId;
   pairEditor.rightId = rightId;
   pairEditor.ratio = normalizePairRatio(ratio);
+  // 取消时要还原到这一刻：正文里的引用、两张图各自的裁剪、以及刚加进来的那张图。
+  pairEditor.originalRef = options.originalRef || pairRefText(leftId, rightId, pairEditor.ratio);
+  pairEditor.originalCrops = {
+    [leftId]: state.images[leftId]?.crop || null,
+    [rightId]: state.images[rightId]?.crop || null,
+  };
+  pairEditor.createdImageId = options.createdImageId || "";
   els.pairModal.classList.remove("hidden");
   refreshPairEditor();
   if (window.lucide) window.lucide.createIcons();
 }
 
-function closePairEditor() {
+function hidePairModal() {
   els.pairModal?.classList.add("hidden");
+  pairEditor.originalRef = "";
+  pairEditor.originalCrops = null;
+  pairEditor.createdImageId = "";
+}
+
+/** 「完成」：改动就地留下。 */
+function commitPairEditor() {
+  hidePairModal();
+}
+
+/** 关闭 / Esc / 点遮罩：回到打开弹窗前的样子。 */
+function cancelPairEditor() {
+  if (!pairModalIsOpen()) return;
+  const current = pairRefText(pairEditor.leftId, pairEditor.rightId, pairEditor.ratio);
+  if (pairEditor.originalRef && els.content.value.includes(current)) {
+    els.content.value = els.content.value.replace(current, pairEditor.originalRef);
+  }
+  for (const [id, crop] of Object.entries(pairEditor.originalCrops || {})) {
+    if (state.images[id]) state.images[id].crop = crop;
+  }
+  const created = pairEditor.createdImageId;
+  hidePairModal();
+  dropUnreferencedImage(created);
+  updateImageList();
+  requestRender();
+}
+
+/** 删掉其中一张，另一张退回普通单图。 */
+function removePairImage(side) {
+  const keepId = side === "left" ? pairEditor.rightId : pairEditor.leftId;
+  const dropId = side === "left" ? pairEditor.leftId : pairEditor.rightId;
+  if (!keepId || !dropId) return;
+  const current = pairRefText(pairEditor.leftId, pairEditor.rightId, pairEditor.ratio);
+  if (!els.content.value.includes(current)) {
+    els.status.textContent = "这张拼图的引用已变化，请关闭后重新打开";
+    return;
+  }
+  commitTextHistory();
+  els.content.value = els.content.value.replace(current, `[[image:${keepId}]]`);
+  commitTextHistory();
+  hidePairModal();
+  dropUnreferencedImage(dropId);
+  updateImageList();
+  requestRender();
+  els.status.textContent = `已删除${side === "left" ? "左" : "右"}图，这里恢复成单张图片`;
 }
 
 function setPairRatio(ratio) {
@@ -9052,8 +9237,11 @@ async function addPairImageToHit(hit) {
     commitTextHistory();
     updateImageList();
     requestRender();
-    els.status.textContent = "已拼入第二张图；在编辑框里删掉 |图片编号 可拆回单图";
-    openPairEditor(leftId, newId);
+    els.status.textContent = "已拼入第二张图；关闭弹窗可撤回，点「完成」才保留";
+    openPairEditor(leftId, newId, DEFAULT_PAIR_RATIO, {
+      originalRef: `[[image:${leftId}]]`,
+      createdImageId: newId,
+    });
   });
   picker.click();
 }
@@ -9184,7 +9372,9 @@ function createImageEditLayer(canvas) {
     const openFromItem = () => {
       const segment = els.content.value.slice(item.sourceStart, item.sourceEnd);
       const parsed = resolveInternalImagePairBlock(segment.trim());
-      if (parsed) openPairEditor(parsed.ids[0], parsed.ids[1], parsed.ratio);
+      if (parsed) {
+        openPairEditor(parsed.ids[0], parsed.ids[1], parsed.ratio, { originalRef: segment.trim() });
+      }
     };
     box.addEventListener("click", openFromItem);
     box.addEventListener("keydown", (event) => {
@@ -9791,7 +9981,9 @@ function renderLivePhotoHandoffFiles() {
 
   if (!livePhotoHandoffState.isBatch) {
     const single = livePhotoHandoffState.liveResults[0];
-    const platform = single?.platform_label ? `${single.platform_label} · ${single.duration} 秒` : "";
+    const platform = single?.duration
+      ? `${single.duration} 秒${Number(single.speed) > 1 ? ` · ${single.speed}× 倍速` : ""}`
+      : "";
     els.livePhotoHandoffFiles.innerHTML = `
       <div class="live-photo-package-card">
         <div class="live-photo-package-row">
@@ -10037,7 +10229,8 @@ async function generateLivePackageForCanvas(canvas, pageIndex, reveal = true, se
         width: clamp(Math.round(hit.width * scale), 40, 1080 - wellX),
         height: clamp(Math.round(hit.height * scale), 40, 1440 - wellY),
       },
-      platform: settings.platform,
+      durationSeconds: settings.duration,
+      speed: settings.speed,
       start: settings.start,
       coverOffset: settings.coverOffset,
       focusX: settings.focusX,
@@ -10057,8 +10250,8 @@ async function generateLivePackageForCanvas(canvas, pageIndex, reveal = true, se
       archive_name: result.archiveName,
       archive_bytes: result.blob.size,
       archive_parts: result.parts,
-      platform_label: settings.platform === "wechat" ? "微信公众号" : "小红书",
-      duration: settings.platform === "wechat" ? 3 : 5,
+      duration: settings.duration,
+      speed: settings.speed,
     };
   }
   onStage?.("page", `正在生成第 ${pageIndex + 1} 页高清卡片…`);
@@ -10074,7 +10267,10 @@ async function generateLivePackageForCanvas(canvas, pageIndex, reveal = true, se
   const settings = normalizeLiveMediaSettings(image.liveSettings);
   const title = `${projectTitleFromData(readForm())}-第${pageIndex + 1}页`;
   const manifest = {
-    platform: settings.platform,
+    // platform 只为兼容还没升级的服务端；时长与倍速以 duration / speed 为准。
+    platform: settings.duration === 3 ? "wechat" : "xhs",
+    duration: settings.duration,
+    speed: settings.speed,
     start: settings.start,
     cover_offset: settings.coverOffset,
     focus_x: settings.focusX,
@@ -10104,8 +10300,8 @@ async function generateLivePackageForCanvas(canvas, pageIndex, reveal = true, se
       ({ detail, progress, jobId, cancel }) => onStage?.("package", detail, progress, { jobId, cancel }),
     );
     result.pageIndex = pageIndex;
-    result.platform_label = settings.platform === "wechat" ? "微信公众号" : "小红书";
-    result.duration = settings.platform === "wechat" ? 3 : 5;
+    result.duration = settings.duration;
+    result.speed = settings.speed;
     return result;
   }
   const payload = new FormData();
@@ -10247,16 +10443,11 @@ async function prepareCloudLivePhotoBatch() {
     for (const [path, entry, marker] of entries) {
       const relative = path.slice(Number(marker) + 5);
       if (!relative) continue;
-      // 平铺导出：实况拆成与图片同级的同名 JPG+MOV，不再套 .pvt 文件夹，
-      // 方便与普通图片一起投送；plist 只在 .pvt 目录结构里有意义，跳过。
-      const name = relative.split("/").pop();
-      if (/\.plist$/i.test(name)) continue;
-      const extension = name.includes(".") ? name.split(".").pop() : "bin";
       const data = await entry.async("arraybuffer");
-      zip.file(`${String(result.pageIndex + 1).padStart(2, "0")}-实况.${extension}`, data);
+      zip.file(`${String(result.pageIndex + 1).padStart(2, "0")}-实况.pvt/${relative}`, data);
       copied += 1;
     }
-    if (!copied) throw new Error(`第 ${result.pageIndex + 1} 页云端包缺少实况文件。`);
+    if (!copied) throw new Error(`第 ${result.pageIndex + 1} 页云端包缺少完整 .pvt。`);
   }
   for (const file of livePhotoHandoffState.staticPackage?.files || []) {
     zip.file(`${String(file.pageIndex + 1).padStart(2, "0")}-图片.png`, file.blob);
@@ -10291,11 +10482,8 @@ async function prepareBrowserLivePhotoBatch() {
   for (const result of livePhotoHandoffState.liveResults) {
     const prefix = `${String(result.pageIndex + 1).padStart(2, "0")}-实况`;
     for (const part of result.archive_parts || []) {
-      // 平铺导出：拆出 .pvt 里的 JPG+MOV 与图片同级命名，plist 跳过
-      const name = part.path.split("/").pop();
-      if (/\.plist$/i.test(name)) continue;
-      const extension = name.includes(".") ? name.split(".").pop() : "bin";
-      zip.file(`${prefix}.${extension}`, part.bytes);
+      // .pvt 包直接与图片同级，不再在外面多套一层 ${prefix}/ 文件夹。
+      zip.file(`${prefix}.pvt/${part.path.split("/").pop()}`, part.bytes);
     }
   }
   for (const file of livePhotoHandoffState.staticPackage?.files || []) {
@@ -10736,7 +10924,7 @@ async function downloadLivePhotoBatch() {
     els.livePhotoHandoffReveal.hidden = !livePhotoHandoffHasLocalFile();
     els.livePhotoHandoffHint.textContent = "";
     els.status.textContent = isBatch
-      ? `已下载 ${livePhotoHandoffState.items.length} 页内容，实况以同名 JPG+MOV 与图片平铺存放，可一起投送。`
+      ? `已下载 ${livePhotoHandoffState.items.length} 页内容，ZIP 内只包含全部 .pvt 和普通 PNG。`
       : "实况照片 ZIP 已下载，解压后只有一个完整 .pvt。";
     updateLivePhotoHandoffProgressSteps(-1, livePhotoHandoffState.items.map((item) => item.pageIndex));
     finishExportProgress("handoff", {
@@ -11542,8 +11730,10 @@ function bindEvents() {
   els.cropModal.addEventListener("click", (event) => {
     if (event.target === els.cropModal) closeCropper();
   });
-  els.pairClose?.addEventListener("click", closePairEditor);
-  els.pairDone?.addEventListener("click", closePairEditor);
+  els.pairClose?.addEventListener("click", cancelPairEditor);
+  els.pairDone?.addEventListener("click", commitPairEditor);
+  els.pairDropLeft?.addEventListener("click", () => removePairImage("left"));
+  els.pairDropRight?.addEventListener("click", () => removePairImage("right"));
   els.pairSwap?.addEventListener("click", swapPairImages);
   els.pairCropLeft?.addEventListener("click", () => void openCropper("image", pairEditor.leftId));
   els.pairCropRight?.addEventListener("click", () => void openCropper("image", pairEditor.rightId));
@@ -11551,7 +11741,7 @@ function bindEvents() {
     button.addEventListener("click", () => setPairRatio(button.dataset.pairRatio));
   });
   els.pairModal?.addEventListener("click", (event) => {
-    if (event.target === els.pairModal) closePairEditor();
+    if (event.target === els.pairModal) cancelPairEditor();
   });
   els.wechatModal.addEventListener("click", (event) => {
     if (event.target === els.wechatModal) closeWechatModal();
@@ -11677,8 +11867,11 @@ function bindEvents() {
   els.livePhotoCropCanvas.addEventListener("pointermove", updateLivePhotoCropCursor);
   els.livePhotoCropCanvas.addEventListener("pointerup", stopLivePhotoCropDrag);
   els.livePhotoCropCanvas.addEventListener("pointercancel", stopLivePhotoCropDrag);
-  els.livePhotoPlatformButtons.forEach((button) => {
-    button.addEventListener("click", () => setLivePhotoPlatform(button.dataset.livePlatform));
+  els.livePhotoDurationButtons.forEach((button) => {
+    button.addEventListener("click", () => setLivePhotoDuration(button.dataset.liveDuration));
+  });
+  els.livePhotoSpeedButtons.forEach((button) => {
+    button.addEventListener("click", () => setLivePhotoSpeed(button.dataset.liveSpeed));
   });
   els.livePhotoRatioButtons.forEach((button) => {
     button.addEventListener("click", () => {
@@ -11711,7 +11904,7 @@ function bindEvents() {
       return;
     }
     if (event.key === "Escape" && !els.cropModal.classList.contains("hidden")) closeCropper();
-    else if (event.key === "Escape" && pairModalIsOpen()) closePairEditor();
+    else if (event.key === "Escape" && pairModalIsOpen()) cancelPairEditor();
     if (event.key === "Escape" && !els.wechatModal.classList.contains("hidden")) closeWechatModal();
     if (event.key === "Escape" && !els.livePhotoModal.classList.contains("hidden")) closeLivePhotoModal();
     if (event.key === "Escape" && !els.livePhotoHandoffModal.classList.contains("hidden")) closeLivePhotoHandoff();

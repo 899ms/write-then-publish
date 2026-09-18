@@ -1710,6 +1710,32 @@ body[data-app-mode="article"] .profile-inline {
   min-width: 224px;
 }
 
+.emoji-popover {
+  width: min(330px, calc(100vw - 36px));
+}
+
+.emoji-grid {
+  display: grid;
+  grid-template-columns: repeat(10, 1fr);
+  gap: 2px;
+  max-height: 210px;
+  overflow-y: auto;
+}
+
+.emoji-button {
+  aspect-ratio: 1;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  font-size: 17px;
+  line-height: 1;
+}
+
+.emoji-button:hover,
+.emoji-button:focus-visible {
+  background: var(--active-bg);
+}
+
 .image-popover {
   width: min(420px, calc(100vw - 36px));
   max-height: 330px;

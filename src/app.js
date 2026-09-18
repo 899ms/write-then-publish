@@ -191,6 +191,8 @@ const els = {
   articleColorButtons: document.querySelectorAll("[data-article-color]"),
   contentImage: $("#contentImageInput"),
   copyPlainText: $("#copyPlainTextBtn"),
+  emojiMenu: $("#emojiMenu"),
+  emojiGrid: $("#emojiGrid"),
   contentVideo: $("#contentVideoInput"),
   obsidianImportMenu: $("#obsidianImportMenu"),
   connectObsidianVault: $("#connectObsidianVaultBtn"),
@@ -3526,13 +3528,15 @@ function insertAtSelection(textarea, value, selectOffset = null) {
 
 function insertAtRange(textarea, value, start, end = start, selectOffset = null) {
   commitTextHistory();
+  // 点工具栏按钮时编辑框已经失焦，这里再 focus() 会让浏览器把滚动条甩到末尾，
+  // 所以和加粗那条路径一样，先记下视口再还原。
+  const viewport = captureTextareaViewport(textarea);
   const current = textarea.value;
   const safeStart = clamp(Number(start) || 0, 0, current.length);
   const safeEnd = clamp(Number(end) || safeStart, safeStart, current.length);
   textarea.value = `${current.slice(0, safeStart)}${value}${current.slice(safeEnd)}`;
   const cursor = selectOffset === null ? safeStart + value.length : safeStart + selectOffset;
-  textarea.focus();
-  textarea.setSelectionRange(cursor, cursor);
+  restoreTextareaSelection(textarea, cursor, cursor, viewport);
   commitTextHistory();
   requestRender();
   return cursor;
@@ -3570,6 +3574,39 @@ function mapPositionAfterTextRemovals(position, ranges) {
     if (position <= range.end) break;
   }
   return position - removed;
+}
+
+// 一组够日常写作用的常用表情；不做搜索和分类，点一下就插到光标处。
+const BASIC_EMOJI = [
+  "😀", "😄", "😊", "🙂", "😉", "😍", "🤩", "😘", "😜", "🤔",
+  "😅", "😂", "🥹", "😭", "😳", "😱", "😤", "🙃", "😏", "🥰",
+  "👍", "👎", "👏", "🙌", "🙏", "💪", "👀", "🤝", "✌️", "🫶",
+  "❤️", "💔", "✨", "⭐", "🌟", "🔥", "💡", "⚡", "🎉", "🎁",
+  "🏆", "🥇", "✅", "❌", "⚠️", "❗", "❓", "💯", "🚀", "📌",
+  "🔗", "📝", "📖", "📊", "📈", "📉", "⏰", "🔍", "🔔", "💬",
+  "🍀", "🌸", "🌈", "☀️", "🌙", "☕", "🍰", "🎵", "🐶", "🐱",
+];
+
+function buildEmojiGrid() {
+  if (!els.emojiGrid || els.emojiGrid.childElementCount) return;
+  for (const emoji of BASIC_EMOJI) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "emoji-button";
+    button.textContent = emoji;
+    button.title = `插入 ${emoji}`;
+    button.setAttribute("aria-label", `插入表情 ${emoji}`);
+    button.addEventListener("click", () => insertEmoji(emoji));
+    els.emojiGrid.append(button);
+  }
+}
+
+function insertEmoji(emoji) {
+  // 面板打开时编辑框已失焦，selectionStart 仍停在用户上次的位置。
+  const cursor = els.content.selectionStart ?? els.content.value.length;
+  insertAtRange(els.content, emoji, cursor, els.content.selectionEnd ?? cursor);
+  if (els.emojiMenu) els.emojiMenu.open = false;
+  els.status.textContent = `已插入 ${emoji}`;
 }
 
 // 复制模式：把正文转成纯文本——去掉图片、星号、颜色/背景/下划线标记
@@ -11716,6 +11753,9 @@ function bindEvents() {
   buildSelectionSwatches("bg");
   els.contentImage.addEventListener("change", handleContentImage);
   els.copyPlainText?.addEventListener("click", () => void copyPlainTextToClipboard());
+  els.emojiMenu?.addEventListener("toggle", () => {
+    if (els.emojiMenu.open) buildEmojiGrid();
+  });
   els.contentVideo.addEventListener("change", handleLivePhotoVideo);
   els.connectObsidianVault?.addEventListener("click", connectObsidianVault);
   els.syncObsidianVault?.addEventListener("click", syncCurrentNoteToObsidian);

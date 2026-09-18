@@ -193,7 +193,6 @@ const els = {
   copyPlainText: $("#copyPlainTextBtn"),
   emojiMenu: $("#emojiMenu"),
   emojiGrid: $("#emojiGrid"),
-  convertWechatEmoji: $("#convertWechatEmojiBtn"),
   contentVideo: $("#contentVideoInput"),
   obsidianImportMenu: $("#obsidianImportMenu"),
   connectObsidianVault: $("#connectObsidianVaultBtn"),
@@ -3614,31 +3613,20 @@ const WECHAT_EMOTICONS = {
 
 function convertWechatEmoticons(text) {
   let converted = 0;
-  // 排除 [[image:…]] 引用（含冒号）和 Markdown 链接（右括号后跟左圆括号）
-  const next = String(text || "").replace(/\[([^\[\]\n:]{1,8})\](?!\()/g, (whole, name) => {
+  const unknown = new Set();
+  // 半角和全角方括号都收；排除 [[image:…]] 引用（含冒号）和 Markdown 链接（右括号后跟左圆括号）
+  const next = String(text || "").replace(/[\[［]([^\[\]［］\n:]{1,8})[\]］](?!\()/g, (whole, rawName) => {
+    const name = rawName.trim();
     const emoji = WECHAT_EMOTICONS[name];
-    if (!emoji) return whole;
-    converted += 1;
-    return emoji;
+    if (emoji) {
+      converted += 1;
+      return emoji;
+    }
+    // 只把「短且含中文」的当成可能的表情名记下来，避免把 [TODO]、a[0] 也算进去
+    if (/[\u4e00-\u9fa5]/.test(name) && name.length <= 6) unknown.add(name);
+    return whole;
   });
-  return { text: next, converted };
-}
-
-function convertWechatEmojiInContent() {
-  const result = convertWechatEmoticons(els.content.value);
-  if (els.emojiMenu) els.emojiMenu.open = false;
-  if (!result.converted) {
-    els.status.textContent = "正文里没有识别到微信表情";
-    return;
-  }
-  const viewport = captureTextareaViewport(els.content);
-  const cursor = Math.min(els.content.selectionStart || 0, result.text.length);
-  commitTextHistory();
-  els.content.value = result.text;
-  commitTextHistory();
-  restoreTextareaSelection(els.content, cursor, cursor, viewport);
-  requestRender();
-  els.status.textContent = `已转换 ${result.converted} 个微信表情，没有对应字符的保持原样`;
+  return { text: next, converted, unknown: [...unknown] };
 }
 
 function buildEmojiGrid() {
@@ -5623,7 +5611,26 @@ async function handleEditorPaste(event) {
   if (!files.length) {
     const markdown = event.clipboardData?.getData("text/plain") || "";
     const references = countMarkdownImageReferences(markdown);
-    if (!references) return;
+    if (!references) {
+      // 微信自带表情复制出来只剩 [微笑] 这种占位文字，粘进来时直接换成 emoji。
+      const wechat = convertWechatEmoticons(markdown);
+      if (wechat.converted) {
+        event.preventDefault();
+        insertAtRange(els.content, wechat.text, cursor, event.currentTarget.selectionEnd ?? cursor);
+        const notice = wechat.unknown.length
+          ? `已把 ${wechat.converted} 个微信表情换成 emoji；这些还没收录：${wechat.unknown.slice(0, 6).map((name) => `[${name}]`).join("")}`
+          : `已把 ${wechat.converted} 个微信表情换成 emoji`;
+        // insertAtRange 会触发重排版，重排版结束时会改写状态栏；这里等它画完再写一次。
+        els.status.textContent = notice;
+        window.setTimeout(() => { els.status.textContent = notice; }, 400);
+        return;
+      }
+      // 一个都没匹配上时，把疑似表情的名字报出来，方便补进对照表。
+      if (wechat.unknown.length >= 2) {
+        els.status.textContent = `这些表情还没收录，可以反馈给作者：${wechat.unknown.slice(0, 6).map((name) => `[${name}]`).join("")}`;
+      }
+      return;
+    }
     event.preventDefault();
     if (hasConnectedObsidianVault()) {
       await importMarkdownFromConnectedVault(markdown, cursor);
@@ -11807,7 +11814,6 @@ function bindEvents() {
   buildSelectionSwatches("bg");
   els.contentImage.addEventListener("change", handleContentImage);
   els.copyPlainText?.addEventListener("click", () => void copyPlainTextToClipboard());
-  els.convertWechatEmoji?.addEventListener("click", convertWechatEmojiInContent);
   els.emojiMenu?.addEventListener("toggle", () => {
     if (els.emojiMenu.open) buildEmojiGrid();
   });

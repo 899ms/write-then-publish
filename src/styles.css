@@ -1736,6 +1736,13 @@ body[data-app-mode="article"] .profile-inline {
   background: var(--active-bg);
 }
 
+.emoji-hint {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .image-popover {
   width: min(420px, calc(100vw - 36px));
   max-height: 330px;

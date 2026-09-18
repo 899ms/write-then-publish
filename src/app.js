@@ -193,6 +193,7 @@ const els = {
   copyPlainText: $("#copyPlainTextBtn"),
   emojiMenu: $("#emojiMenu"),
   emojiGrid: $("#emojiGrid"),
+  convertWechatEmoji: $("#convertWechatEmojiBtn"),
   contentVideo: $("#contentVideoInput"),
   obsidianImportMenu: $("#obsidianImportMenu"),
   connectObsidianVault: $("#connectObsidianVaultBtn"),
@@ -3586,6 +3587,59 @@ const BASIC_EMOJI = [
   "🔗", "📝", "📖", "📊", "📈", "📉", "⏰", "🔍", "🔔", "💬",
   "🍀", "🌸", "🌈", "☀️", "🌙", "☕", "🍰", "🎵", "🐶", "🐱",
 ];
+
+// 微信自带表情是图片，复制出来只剩 [微笑] 这种占位文字，图片根本没进剪贴板。
+// 这里按名字换成最接近的 Unicode 表情；微信原创、没有对应字符的一律不动。
+const WECHAT_EMOTICONS = {
+  微笑: "😊", 撇嘴: "😒", 色: "😍", 发呆: "😳", 得意: "😎", 流泪: "😢", 害羞: "☺️",
+  闭嘴: "🤐", 睡: "😴", 大哭: "😭", 尴尬: "😅", 发怒: "😠", 调皮: "😜", 呲牙: "😁",
+  惊讶: "😮", 难过: "🙁", 囧: "😖", 抓狂: "😫", 吐: "🤮", 偷笑: "🤭", 愉快: "😄",
+  白眼: "🙄", 翻白眼: "🙄", 傲慢: "😤", 困: "😪", 惊恐: "😱", 憨笑: "😀", 悠闲: "😌",
+  咒骂: "🤬", 疑问: "😕", 嘘: "🤫", 晕: "😵", 衰: "😩", 骷髅: "💀", 敲打: "🔨",
+  再见: "👋", 擦汗: "😓", 鼓掌: "👏", 坏笑: "😏", 右哼哼: "😤", 左哼哼: "😤",
+  鄙视: "😒", 委屈: "🥺", 快哭了: "😢", 阴险: "😏", 亲亲: "😘", 可怜: "🥺",
+  笑脸: "😄", 生病: "🤒", 破涕为笑: "🥲", 吐舌: "😝", 脸红: "😊", 恐惧: "😨",
+  失望: "😞", 无语: "😑", 嘿哈: "😆", 捂脸: "🤦", 奸笑: "😏", 机智: "🤓",
+  皱眉: "😟", 耶: "✌️", 吃瓜: "🍉", 加油: "💪", 汗: "😰", 天啊: "😱", 社会社会: "😎",
+  旺柴: "🐶", 好的: "👌", 打脸: "😣", 哇: "😲", 让我看看: "👀", 叹气: "😮‍💨",
+  苦涩: "😖", 裂开: "😵", 嘴唇: "💋", 爱心: "❤️", 心碎: "💔", 拥抱: "🤗",
+  强: "👍", 弱: "👎", 差劲: "👎", 握手: "🤝", 胜利: "✌️", 抱拳: "🙏", 合十: "🙏",
+  勾引: "👈", 拳头: "✊", OK: "👌", 菜刀: "🔪", 西瓜: "🍉", 啤酒: "🍺", 咖啡: "☕",
+  猪头: "🐷", 玫瑰: "🌹", 凋谢: "🥀", 蛋糕: "🎂", 炸弹: "💣", 便便: "💩",
+  月亮: "🌙", 太阳: "☀️", 礼物: "🎁", 红包: "🧧", 發: "💰", 福: "🧧",
+  烟花: "🎆", 爆竹: "🧨", 庆祝: "🎉", 转圈: "💫", 发抖: "🥶", 怄火: "😡",
+  磕头: "🙇", 投降: "🏳️", 激动: "🤩", 献吻: "😘", 爱你: "❤️", 跳跳: "🤸",
+  鸡: "🐔", 象: "🐘", 恭喜发财: "🤑", 皮卡: "⚡",
+};
+
+function convertWechatEmoticons(text) {
+  let converted = 0;
+  // 排除 [[image:…]] 引用（含冒号）和 Markdown 链接（右括号后跟左圆括号）
+  const next = String(text || "").replace(/\[([^\[\]\n:]{1,8})\](?!\()/g, (whole, name) => {
+    const emoji = WECHAT_EMOTICONS[name];
+    if (!emoji) return whole;
+    converted += 1;
+    return emoji;
+  });
+  return { text: next, converted };
+}
+
+function convertWechatEmojiInContent() {
+  const result = convertWechatEmoticons(els.content.value);
+  if (els.emojiMenu) els.emojiMenu.open = false;
+  if (!result.converted) {
+    els.status.textContent = "正文里没有识别到微信表情";
+    return;
+  }
+  const viewport = captureTextareaViewport(els.content);
+  const cursor = Math.min(els.content.selectionStart || 0, result.text.length);
+  commitTextHistory();
+  els.content.value = result.text;
+  commitTextHistory();
+  restoreTextareaSelection(els.content, cursor, cursor, viewport);
+  requestRender();
+  els.status.textContent = `已转换 ${result.converted} 个微信表情，没有对应字符的保持原样`;
+}
 
 function buildEmojiGrid() {
   if (!els.emojiGrid || els.emojiGrid.childElementCount) return;
@@ -11753,6 +11807,7 @@ function bindEvents() {
   buildSelectionSwatches("bg");
   els.contentImage.addEventListener("change", handleContentImage);
   els.copyPlainText?.addEventListener("click", () => void copyPlainTextToClipboard());
+  els.convertWechatEmoji?.addEventListener("click", convertWechatEmojiInContent);
   els.emojiMenu?.addEventListener("toggle", () => {
     if (els.emojiMenu.open) buildEmojiGrid();
   });
